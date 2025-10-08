@@ -1,7 +1,20 @@
+//------ Debug ------//
+
+//define DEBUG
+
+#ifdef DEBUG
+#define DEBUG_PRINTLN(x) debugPrintln(x) // Enable printing
+#define DEBUG_PRINT(x) debugPrint(x) // Enable printing
+#define SERIAL_COMMS_STEPS 5
+#else
+#define DEBUG_PRINT(x) // Disable printing (do nothing)
+#define DEBUG_PRINTLN(x) // Disable printing (do nothing)
+#define SERIAL_COMMS_STEPS 3
+#endif
+
 //------ Libraries ------//
 #include "Arduino.h"
 #include "EEPROM.h"
-#include "Vector.h"
 #include "string.h"
 // DY player over UART
 #include <SoftwareSerial.h>
@@ -80,6 +93,7 @@ bool nfcRead = 0;
 
 // Save track
 unsigned long lastSaveTrack = 0;
+static unsigned long saveTrackFrequency = 120000;
 
 // Player info
 int8_t playerStatus = -1;
@@ -89,7 +103,7 @@ int playerTrack = 0;
 int desiredTrack = -1;
 
 // Volume
-int setVolume;
+int setVolume; //variable for holding previously set volume level
 byte desiredVolume = 0;  //variable for holding volume level
 
 // Sleep
@@ -122,7 +136,7 @@ void setup() {
   //------ START NFC --------//
   nfc.begin();
   delay(500);
-  Serial.println(F("Started nfc"));
+  DEBUG_PRINTLN("Started nfc");
 
   //------ SET OTHER THINGS ------//
   pinMode(pinPlayButton, INPUT_PULLUP);
@@ -131,10 +145,6 @@ void setup() {
   pinMode(pinPreviousButton, INPUT_PULLUP);
   pinMode(pinSleepButton, INPUT_PULLUP);
   pinMode(pinPN532SPI, OUTPUT);
-
-  EEPROM.update(0,5);
-  EEPROM.update(1,35);
-
 }
 
 //*****************************************************************************************//
@@ -147,6 +157,7 @@ void loop() {
   stateMachine();
   saveTrack();
   sleepManager();
+  volumeManager();
   serialComms();
 }
 
@@ -242,11 +253,9 @@ void handleButtons() {
 void stateMachine(void){
   if (buttonOutcome == 0) {
     if (state != 1 && state != 0) {
-      EEPROM.update(bookNumber,playerTrack);
-      lastSaveTrack = now;
       state = 0; // stop
-      Serial.println("stop");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("stop");
+      saveTrackNow();
     }
   }
   switch (state)
@@ -255,7 +264,7 @@ void stateMachine(void){
     if (playerStatus == 0) {
       clearVariables();
       state = 1; //state > stopped
-      
+      DEBUG_PRINTLN("stop > stopped");
     } else {
       playerStop = 1;
     }
@@ -263,12 +272,10 @@ void stateMachine(void){
   case 1: // stopped
     if (playerStatus != 0) {
       state = 0; //state > stop
-      Serial.println("stopped > stop");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("stopped > stop");
     } else if (buttonOutcome == 1) {
       state = 2; // state > readNFC
-      Serial.println("stopped > readNFC");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("stopped > readNFC");
     }
     break;
   case 2: // readNFC
@@ -276,15 +283,13 @@ void stateMachine(void){
       nfcRead = 1;
     } else {
       state = 3; // state > play
-      Serial.println("readNFC > play");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("readNFC > play");
     }
     break;
   case 3: // play
     if (playerStatus == 1 && playerTrack==desiredTrack) {
       state = 4; // state > playing
-      Serial.println("play > playing");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("play > playing");
     } else {
       playerPlay = 1;
     }
@@ -292,32 +297,32 @@ void stateMachine(void){
   case 4: // playing
     if (sleepNow == 1) {
       state = 8; // state > sleep
-      Serial.println("playing > sleep");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("playing > sleep");
+      saveTrackNow();
     } else if (buttonOutcome == 2) {
       state = 5; // state > pause
-      Serial.println("playing > pause");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("playing > pause");
+      saveTrackNow();
     } else if (buttonOutcome == 3) {
       setNextTrack();
       state = 3;
-      Serial.println("next track");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("next track");
     } else if (buttonOutcome == 4) {
       setNextChapter();
       state = 3;
-      Serial.println("next chapter");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("next chapter");
     } else if (buttonOutcome == 5) {
       setPreviousTrack();
       state = 3;
-      Serial.println("previous track");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("previous track");
     } else if (buttonOutcome == 6) {
       setPreviousChapter();
       state = 3;
-      Serial.println("previous chapter");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("previous chapter");
+    } else if (playerTrack > bookLastTrack) {
+      state = 8;
+      DEBUG_PRINTLN("Last chapter > sleep");
+      setFirstTrack();
     }
     break;
   case 5: // pause
@@ -325,19 +330,16 @@ void stateMachine(void){
       playerPause=1;
     } else if (playerStatus==2) {
       state = 6; // state > paused
-      Serial.println("pause > paused");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("pause > paused");
     }
     break;
   case 6: // paused
     if (playerStatus == 1) {
       state = 5; // state > pause
-      Serial.println("pause > paused");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("pause > paused");
     } else if (buttonOutcome == 1) {
       state = 7; // state > resume
-      Serial.println("paused > resume");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("paused > resume");
     }
     break;
   case 7: // resume
@@ -346,15 +348,13 @@ void stateMachine(void){
     }
     if (playerStatus == 1) {
       state = 4; // state > playing
-      Serial.println("resume > playing");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("resume > playing");
     }
     break;
   case 8: // sleep
     if (playerStatus == 0) {
       state = 9; // state > sleeping
-      Serial.println("sleep > sleeping");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("sleep > sleeping");
     } else {
       playerStop = 1;
     }
@@ -362,8 +362,7 @@ void stateMachine(void){
   case 9: // sleeping
     if (playerStatus != 0) {
       state = 8; // state > sleep
-      Serial.println("sleeping > sleep");
-      lastSerialComms = now;
+      DEBUG_PRINTLN("sleeping > sleep");
     }
     break;
   default:
@@ -379,28 +378,20 @@ void serialComms() {
     case 0:
       clearBuffer();
       playerStatus = static_cast<int>(player.checkPlayState());
-      break;
-
-    case 1:
-      clearBuffer();
-      Serial.println("Status: "+String(playerStatus));
+      DEBUG_PRINTLN("Status: "+String(playerStatus));
       break;
       
-    case 2:
+    case 1:
       clearBuffer();
       playerTrack = player.getPlayingSound();
-      break;
-    
-    case 3:
-      clearBuffer();
-      Serial.println("Track: "+String(playerTrack));
+      DEBUG_PRINTLN("Track: "+String(playerTrack));
       break;
 
-    case 4:
+    case 3:
       if (playerPlay) {
         player.playSpecifiedDevicePath(DY::Device::Sd, formatFilename(bookNumber, desiredTrack));
-        Serial.print("playing track");
-        Serial.println(formatFilename(bookNumber, desiredTrack));
+        DEBUG_PRINT("playing track");
+        DEBUG_PRINTLN(formatFilename(bookNumber, desiredTrack));
         playerPlay = 0;
       } else if (playerStop) {
         player.stop();
@@ -421,8 +412,7 @@ void serialComms() {
       }
       break;
   }
-
-  serialStep = (serialStep + 1) % 5; // loop through 0 → 1 → 2 → 0 ...
+  serialStep = (serialStep + 1) % 4; // loop through 0 → 1 → 2 → 0 ...
   lastSerialComms = now;
 }
 
@@ -431,7 +421,6 @@ void resetFlags() {
   playerStop = 0;
   playerPause = 0;
   playerResume = 0;
-  playerVolume = 0;
   nfcRead = 0;
 }
 
@@ -459,11 +448,22 @@ void sleepManager() {
 
 void saveTrack() {
   if (state == 4) {
-    if (now - lastSaveTrack > 60000) {
-      EEPROM.update(bookNumber,playerTrack);
-      lastSaveTrack = now;
+    if (now - lastSaveTrack > saveTrackFrequency) {
+      saveTrackNow();
     }
   }
+}
+
+void saveTrackNow() {
+  if (playerTrack != -1) {
+    EEPROM.update(bookNumber,playerTrack);
+    lastSaveTrack = now;
+  }
+}
+
+void setFirstTrack() {
+  EEPROM.update(bookNumber,bookChapterTracks[0]);
+  lastSaveTrack = now;
 }
 
 void readNfc(void) {
@@ -494,8 +494,7 @@ void readNfc(void) {
       desiredTrack = bookChapterTracks[0];
     }
   } else {
-    Serial.println("waiting for tag");
-    lastSerialComms = now;
+    DEBUG_PRINTLN("waiting for tag");
   }
 }
 
@@ -551,6 +550,18 @@ void interpretNfcPayload(String input, int& bookNumber, int* bookChapterTracks, 
     String pair = input.substring((i + 1) * 2, (i + 1) * 2 + 2);
     bookChapterTracks[i] = decodeBase62Pair(pair);
   }
+
+  DEBUG_PRINT("Book Number: ");
+  DEBUG_PRINTLN(String(bookNumber));
+  DEBUG_PRINTLN("Chapters:");
+  for (int i = 0; i < bookChapters; ++i) {
+    DEBUG_PRINT("  Chapter ");
+    DEBUG_PRINT(String(i + 1));
+    DEBUG_PRINT(": ");
+    DEBUG_PRINTLN(String(bookChapterTracks[i]));
+  }
+  DEBUG_PRINT("Final Track Number: ");
+  DEBUG_PRINTLN(String(bookLastTrack));
 }
 
 void setNextTrack() {
@@ -595,22 +606,20 @@ void setPreviousChapter() {
     desiredTrack = bookChapterTracks[bookChapters - 1];
 }
 
-/*
-
-void print_status(const char* printseq) {
-  if (strcmp(printseq, "read_nfc") == 0){
-    Serial.print("Book Number: ");
-    Serial.println(bookNumber);
-    Serial.println("Chapters:");
-    for (int i = 0; i < bookChapters; ++i) {
-    Serial.print("  Chapter ");
-    Serial.print(i + 1);
-    Serial.print(": ");
-    Serial.println(bookChapterTracks[i]);
-    }
-    Serial.print("Final Track Number: ");
-    Serial.println(bookLastTrack);
+void volumeManager() {
+  if (desiredVolume - setVolume > 1) {
+    playerVolume = 1;
+  } else if (setVolume - desiredVolume > 1) {
+    playerVolume = 1;
   }
 }
 
-*/
+void debugPrint(String input) {
+  Serial.print(input);
+  lastSerialComms = now;
+}
+
+void debugPrintln(String input) {
+  Serial.println(input);
+  lastSerialComms = now;
+}
