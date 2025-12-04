@@ -1,6 +1,6 @@
 //------ Debug ------//
 
-//define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
 #define DEBUG_PRINTLN(x) debugPrintln(x) // Enable printing
@@ -132,6 +132,8 @@ void setup() {
   setVolume = desiredVolume;
   delay(500);
   player.setCycleMode(DY::PlayMode::SequenceDir);
+  DEBUG_PRINTLN("Started player");
+  delay(500);
 
   //------ START NFC --------//
   nfc.begin();
@@ -145,6 +147,8 @@ void setup() {
   pinMode(pinPreviousButton, INPUT_PULLUP);
   pinMode(pinSleepButton, INPUT_PULLUP);
   pinMode(pinPN532SPI, OUTPUT);
+  pinMode(A1, OUTPUT);
+  digitalWrite(A1, HIGH);
 }
 
 //*****************************************************************************************//
@@ -387,7 +391,7 @@ void serialComms() {
       DEBUG_PRINTLN("Track: "+String(playerTrack));
       break;
 
-    case 3:
+    case 2:
       if (playerPlay) {
         player.playSpecifiedDevicePath(DY::Device::Sd, formatFilename(bookNumber, desiredTrack));
         DEBUG_PRINT("playing track");
@@ -412,7 +416,7 @@ void serialComms() {
       }
       break;
   }
-  serialStep = (serialStep + 1) % 4; // loop through 0 → 1 → 2 → 0 ...
+  serialStep = (serialStep + 1) % 3; // loop through 0 → 1 → 2 → 0 ...
   lastSerialComms = now;
 }
 
